@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Places API Search</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            display: flex;
+            padding: 20px;
+            gap: 20px;
+            height: 100vh;
+        }
+
+        .column {
+            flex: 1;
+        }
+
+        .column:first-child {
+            flex: 2;
+        }
+
+        .column:last-child {
+            flex: 1;
+        }
+
+        #map {
+            height: calc(100vh - 100px);
+            width: 100%;
+            margin-top: 10px;
+            border-radius: 8px;
+        }
+
+        #searchInput {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        .form-group {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #radiusInput {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        #scanButton {
+            width: 100%;
+            padding: 10px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #scanButton:hover {
+            background: #45a049;
+        }
+
+        #results {
+            margin-top: 20px;
+            padding: 10px;
+        }
+
+        .result-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+
+        .result-item a {
+            color: #1a73e8;
+            text-decoration: none;
+        }
+
+        .result-item a:hover {
+            text-decoration: underline;
+        }
+    </style>
+    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="column">
+            <input id="searchInput" type="text" placeholder="Search for a location...">
+            <div id="map"></div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="radiusInput">Search Radius (meters)</label>
+                <input type="number" id="radiusInput" min="1" max="50000" value="1000">
+                <button id="scanButton">Scan Area</button>
+            </div>
+
+            <div id="results" style="max-height: calc(100vh - 200px); overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAaStiuLK-4UnoppS7ZcEqNnuE10Lpanvo&libraries=places"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+
+    <script>
+        let map;
+        let marker;
+        let circle;
+        let squares = [];
+        let places
+
+        const cellSide = 4;
+        const scrapingRegion = 'New Zealand';
+        const resultsTreshold = 40;
+
+        const appData = {
+            squares: new Map(),
+            currentUid: 0,
+            totalApiCalls: 0
+        };
+
+        function generateUid() {
+            appData.currentUid++;
+            return `square_${appData.currentUid}`;
+        }
+
+        function splitBounds(bounds) {
+            const ne = bounds.getNorthEast();
+            const sw = bounds.getSouthWest();
+            const center = bounds.getCenter();
+
+            return [
+                // Northwest
+                new google.maps.LatLngBounds(
+                    new google.maps.LatLng(center.lat(), sw.lng()),
+                    new google.maps.LatLng(ne.lat(), center.lng())
+                ),
+                // Northeast
+                new google.maps.LatLngBounds(
+                    new google.maps.LatLng(center.lat(), center.lng()),
+                    new google.maps.LatLng(ne.lat(), ne.lng())
+                ),
+                // Southwest
+                new google.maps.LatLngBounds(
+                    new google.maps.LatLng(sw.lat(), sw.lng()),
+                    new google.maps.LatLng(center.lat(), center.lng())
+                ),
+                // Southeast
+                new google.maps.LatLngBounds(
+                    new google.maps.LatLng(sw.lat(), center.lng()),
+                    new google.maps.LatLng(center.lat(), ne.lng())
+                )
+            ];
+        }
+
+        function getCoordinatesFromBounds(bounds) {
+            const ne = bounds.getNorthEast();
+            const sw = bounds.getSouthWest();
+            return [
+                { lat: sw.lat(), lng: sw.lng() },
+                { lat: ne.lat(), lng: sw.lng() },
+                { lat: ne.lat(), lng: ne.lng() },
+                { lat: sw.lat(), lng: ne.lng() }
+            ];
+        }
+
+        function drawRectangle(bounds, color = "#FF0000") {
+            return new google.maps.Rectangle({
+                bounds: bounds,
+                strokeColor: color,
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: color,
+                fillOpacity: 0.33,
+                map: map,
+            });
+        }
+
+        function getPolygonCenter(coordinates) {
+            const bounds = new google.maps.LatLngBounds();
+            coordinates.forEach(coord => {
+                bounds.extend(coord);
+            });
+            return bounds.getCenter();
+        }
+
+        function fetchData(bounds, coordinates, uid = generateUid()) {
+            let totalResults = 0;
+            let results = [];
+            let markers = [];
+            let countLabel = null;
+            let rectangle = drawRectangle(bounds);
+
+            function clearVisuals() {
+                markers.forEach(marker => marker.setMap(null));
+                markers = [];
+                if (countLabel) {
+                    countLabel.setMap(null);
+                }
+                if (rectangle) {
+                    rectangle.setMap(null);
+                }
+            }
+
+            function updateCountLabel() {
+                appData.totalApiCalls++;
+
+                if (countLabel) {
+                    countLabel.setMap(null);
+                }
+
+                const center = getPolygonCenter(coordinates);
+                countLabel = new google.maps.Marker({
+                    position: center,
+                    map: map,
+                    icon: {
+                        url: "data:image/png;base64,",
+                        size: new google.maps.Size(1, 1),
+                        anchor: new google.maps.Point(0, 0)
+                    },
+                    label: {
+                        text: `${totalResults}`,
+                        color: "white",
+                        fontSize: "16px",
+                        fontWeight: "bold",
+                        className: totalResults >= resultsTreshold ? "marker-count" : "marker-count gray"
+                    },
+                    zIndex: 1000
+                });
+            }
+
+            function searchWithToken(pageToken = null) {
+                // const searchRequest = {
+                //     bounds: bounds,
+                //     types: ['cafe']
+                // };
+
+                const searchRequest = {
+                    type: ['lodging'],
+                    businessStatus: 'CLOSED_PERMANENTLY',
+                    bounds: bounds,
+                };
+
+
+
+                if (pageToken) {
+                    searchRequest.pageToken = pageToken;
+                }
+
+
+                places.search(searchRequest, async function (searchResults, status, pagination) {
+                    if (status == google.maps.places.PlacesServiceStatus.OK) {
+                        totalResults += searchResults.length;
+                        results = results.concat(searchResults);
+
+                        updateCountLabel();
+
+                        if (pagination && pagination.hasNextPage) {
+                            setTimeout(() => pagination.nextPage(), 2000);
+                        } else {
+                            // When all results are collected, check if splitting is needed
+                            if (totalResults >= resultsTreshold) {
+                                clearVisuals();
+
+                                // Split into 4 parts and search each
+                                const subBounds = splitBounds(bounds);
+
+                                // Sequential processing using for...of loop
+                                for (const [index, subBound] of subBounds.entries()) {
+                                    const subUid = `${uid}_${index}`;
+                                    await fetchData(subBound, getCoordinatesFromBounds(subBound), subUid);
+                                }
+                            } else {
+
+
+                                // fetch("http://localhost:3003/add-place", {
+                                //     method: "POST",
+                                //     headers: {
+                                //         "Content-Type": "application/json",
+                                //     },
+                                //     body: JSON.stringify({
+                                //         results: results.map(item => {
+
+                                //             //update to get the photoes links 
+
+                                //             item.photos = item.photos?.map(photo => {
+                                //                 return photo.getUrl();
+                                //             }) ?? []
+
+                                //             return {
+                                //                 place_id: item.place_id,
+                                //                 lat: item.geometry.location.lat(),
+                                //                 lon: item.geometry.location.lng(),
+                                //                 name: item.name,
+                                //                 type: JSON.stringify(item.types),
+                                //                 rating: item.rating,
+                                //                 user_ratings_total: item.user_ratings_total,
+                                //                 address: item.plus_code.compound_code,
+                                //                 json_data: JSON.stringify(item),
+                                //                 region: scrapingRegion
+                                //             }
+                                //         })
+                                //     }),
+                                // })
+
+                                // Store results in appData if less than 60
+                                appData.squares.set(uid, {
+                                    bounds: bounds,
+                                    results: results,
+                                    totalResults: totalResults
+                                });
+
+                                displayResults();
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Start the search
+            searchWithToken();
+        }
+
+        function createGoogleMapsLink(place) {
+            return `https://www.google.com/maps/place/?q=place_id:${place.place_id}`;
+        }
+
+        function displayResults() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+
+            appData.squares.forEach((square, uid) => {
+                square.results
+                    .filter(place =>
+                        place.business_status === 'CLOSED_PERMANENTLY'
+                        ||
+                        place.business_status === 'CLOSED_TEMPORARILY'
+                    )
+                    .forEach(place => {
+                        const resultItem = document.createElement('div');
+                        resultItem.className = 'result-item';
+                        resultItem.innerHTML = `
+                        <div>Business Status: ${place.business_status}</div>
+                        <div>Place ID: ${place.place_id}</div>
+                        <div>Name: <a href="${createGoogleMapsLink(place)}" target="_blank">${place.name}</a></div>
+                    `;
+                        resultsDiv.appendChild(resultItem);
+                    });
+            });
+        }
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: -34.397, lng: 150.644 },
+                zoom: 13
+            });
+
+            places = new google.maps.places.PlacesService(map);
+
+            const input = document.getElementById('searchInput');
+            const autocomplete = new google.maps.places.Autocomplete(input);
+
+            autocomplete.bindTo('bounds', map);
+
+            autocomplete.addListener('place_changed', () => {
+                const place = autocomplete.getPlace();
+
+                if (!place.geometry) {
+                    window.alert("No details available for: " + place.name);
+                    return;
+                }
+
+                if (marker) marker.setMap(null);
+                if (circle) circle.setMap(null);
+                // Clear existing squares
+                squares.forEach(square => square.setMap(null));
+                squares = [];
+
+                marker = new google.maps.Marker({
+                    map: map,
+                    position: place.geometry.location
+                });
+
+                const radius = parseInt(document.getElementById('radiusInput').value);
+                circle = new google.maps.Circle({
+                    map: map,
+                    radius: radius,
+                    fillColor: '#FF0000',
+                    fillOpacity: 0.2,
+                    strokeColor: '#FF0000',
+                    strokeOpacity: 0.4,
+                    strokeWeight: 2,
+                    center: place.geometry.location
+                });
+
+                map.fitBounds(circle.getBounds());
+            });
+
+            // Add radius input change listener
+            document.getElementById('radiusInput').addEventListener('input', () => {
+                if (circle && marker) {
+                    const radius = parseInt(document.getElementById('radiusInput').value);
+                    circle.setRadius(radius);
+                    map.fitBounds(circle.getBounds());
+                }
+            });
+
+            function clearAll() {
+                // Clear all rectangles
+                squares.forEach(square => square.setMap(null));
+                squares = [];
+
+                // Clear all markers from previous searches
+                if (marker) marker.setMap(null);
+                if (circle) circle.setMap(null);
+
+                // Reset appData
+                appData.squares = new Map();
+                appData.currentUid = 0;
+                appData.totalApiCalls = 0;
+
+                document.getElementById('results').innerHTML = '';
+            }
+
+            document.getElementById('scanButton').addEventListener('click', () => {
+                const radius = parseInt(document.getElementById('radiusInput').value);
+                if (marker) {
+                    // Clear everything before starting new scan
+                    clearAll();
+
+                    const center = marker.getPosition();
+                    const centerPoint = turf.point([center.lng(), center.lat()]);
+                    // Create a circle using turf
+                    const circleFeature = turf.circle(centerPoint, radius / 1000, { units: 'kilometers' });
+
+                    // Get the bounding box of the circle
+                    const bbox = turf.bbox(circleFeature);
+                    const [minX, minY, maxX, maxY] = bbox;
+
+                    // Create Google Maps LatLngBounds from the bbox
+                    const googleBounds = new google.maps.LatLngBounds(
+                        new google.maps.LatLng(minY, minX), // southwest
+                        new google.maps.LatLng(maxY, maxX)  // northeast
+                    );
+
+                    // Create coordinates array for the bounds
+                    const coordinates = [
+                        { lat: minY, lng: minX }, // southwest
+                        { lat: maxY, lng: minX }, // northwest
+                        { lat: maxY, lng: maxX }, // northeast
+                        { lat: minY, lng: maxX }  // southeast
+                    ];
+
+                    fetchData(googleBounds, coordinates);
+                } else {
+                    alert('Please select a location first!');
+                }
+            });
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+
+</html>

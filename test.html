@@ -178,16 +178,6 @@
                         totalResults += searchResults.length;
                         results = results.concat(searchResults);
 
-                        // Show results on map
-                        // searchResults.forEach(place => {
-                        //     const marker = new google.maps.Marker({
-                        //         position: place.geometry.location,
-                        //         map: map,
-                        //         title: place.name
-                        //     });
-                        //     markers.push(marker);
-                        // });
-
                         updateCountLabel();
 
                         if (pagination && pagination.hasNextPage) {
