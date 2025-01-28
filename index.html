@@ -63,6 +63,7 @@
             background: #45a049;
         }
     </style>
+    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
 </head>
 <body>
     <div class="container">
@@ -82,7 +83,8 @@
     <script>
         let map;
         let marker;
-        let circle; // Add this new variable
+        let circle;
+        let squares = [];
 
         function initMap() {
             map = new google.maps.Map(document.getElementById('map'), {
@@ -103,12 +105,11 @@
                     return;
                 }
 
-                if (marker) {
-                    marker.setMap(null);
-                }
-                if (circle) {
-                    circle.setMap(null);
-                }
+                if (marker) marker.setMap(null);
+                if (circle) circle.setMap(null);
+                // Clear existing squares
+                squares.forEach(square => square.setMap(null));
+                squares = [];
 
                 marker = new google.maps.Marker({
                     map: map,
@@ -140,10 +141,61 @@
             });
 
             document.getElementById('scanButton').addEventListener('click', () => {
-                const radius = document.getElementById('radiusInput').value;
+                const radius = parseInt(document.getElementById('radiusInput').value);
                 if (marker) {
-                    // Add your scanning logic here
-                    console.log(`Scanning area with radius: ${radius}m around selected location`);
+                    // Clear existing squares
+                    squares.forEach(square => square.setMap(null));
+                    squares = [];
+
+                    const center = marker.getPosition();
+                    const centerPoint = turf.point([center.lng(), center.lat()]);
+                    
+                    // Create a circle using turf
+                    const circleFeature = turf.circle(centerPoint, radius / 1000, { units: 'kilometers' });
+                    
+                    // Get the bounding box of the circle
+                    const bbox = turf.bbox(circleFeature);
+                    const [minX, minY, maxX, maxY] = bbox;
+                    
+                    // Calculate the size of each grid cell
+                    const width = (maxX - minX) / 3;
+                    const height = (maxY - minY) / 3;
+
+                    // Create 3x3 grid
+                    for (let i = 0; i < 3; i++) {
+                        for (let j = 0; j < 3; j++) {
+                            const squareBounds = [
+                                { 
+                                    lat: maxY - (i * height), 
+                                    lng: minX + (j * width) 
+                                },
+                                { 
+                                    lat: maxY - (i * height), 
+                                    lng: minX + ((j + 1) * width) 
+                                },
+                                { 
+                                    lat: maxY - ((i + 1) * height), 
+                                    lng: minX + ((j + 1) * width) 
+                                },
+                                { 
+                                    lat: maxY - ((i + 1) * height), 
+                                    lng: minX + (j * width) 
+                                }
+                            ];
+
+                            const square = new google.maps.Polygon({
+                                paths: squareBounds,
+                                strokeColor: '#FF0000',
+                                strokeOpacity: 0.8,
+                                strokeWeight: 1,
+                                fillColor: '#FF0000',
+                                fillOpacity: 0.15,
+                                map: map
+                            });
+
+                            squares.push(square);
+                        }
+                    }
                 } else {
                     alert('Please select a location first!');
                 }
