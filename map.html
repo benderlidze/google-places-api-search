@@ -252,8 +252,8 @@
                 // };
 
                 const searchRequest = {
-                    type: ['lodging'],
                     bounds: bounds,
+                    types: ['lodgy']
                 };
 
 
@@ -286,37 +286,6 @@
                                     await fetchData(subBound, getCoordinatesFromBounds(subBound), subUid);
                                 }
                             } else {
-
-
-                                // fetch("http://localhost:3003/add-place", {
-                                //     method: "POST",
-                                //     headers: {
-                                //         "Content-Type": "application/json",
-                                //     },
-                                //     body: JSON.stringify({
-                                //         results: results.map(item => {
-
-                                //             //update to get the photoes links 
-
-                                //             item.photos = item.photos?.map(photo => {
-                                //                 return photo.getUrl();
-                                //             }) ?? []
-
-                                //             return {
-                                //                 place_id: item.place_id,
-                                //                 lat: item.geometry.location.lat(),
-                                //                 lon: item.geometry.location.lng(),
-                                //                 name: item.name,
-                                //                 type: JSON.stringify(item.types),
-                                //                 rating: item.rating,
-                                //                 user_ratings_total: item.user_ratings_total,
-                                //                 address: item.plus_code.compound_code,
-                                //                 json_data: JSON.stringify(item),
-                                //                 region: scrapingRegion
-                                //             }
-                                //         })
-                                //     }),
-                                // })
 
                                 // Store results in appData if less than 60
                                 appData.squares.set(uid, {
